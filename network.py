@@ -134,7 +134,6 @@ class GAT(nn.Module):
         
     def forward(self, x, adj):
         batch_size,states_num,_ = x.shape
-        # batch_concat = torch.zeros((batch_size,states_num,self.outsize))
         x = F.dropout(x, self.dropout, training=self.training)
         peep = [att(x, adj) for att in self.attentions]
         x = torch.cat(peep, -1) #XXX
