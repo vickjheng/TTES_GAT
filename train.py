@@ -52,10 +52,10 @@ class Trainer:
             self.env.flow_info(flow_idx)
             state = self.env.get_state()
             while True:
-                # adjacent_matrix = torch.from_numpy(self.env.graph.link_adjacent_matrix).unsqueeze(dim=0).float().to(self.device)
-                adjacent_matrix = torch.from_numpy(self.env.graph.link_adjacent_matrix).float().to(self.device)
-                # link_q = self.eval_q(state.unsqueeze(dim=0).to(self.device), adjacent_matrix).reshape(-1)
-                link_q = self.eval_q((state).to(self.device), adjacent_matrix).reshape(-1)               
+                adjacent_matrix = torch.from_numpy(self.env.graph.link_adjacent_matrix).unsqueeze(dim=0).float().to(self.device)
+                # adjacent_matrix = torch.from_numpy(self.env.graph.link_adjacent_matrix).float().to(self.device)
+                link_q = self.eval_q(state.unsqueeze(dim=0).to(self.device), adjacent_matrix).reshape(-1)
+                # link_q = self.eval_q((state).to(self.device), adjacent_matrix).reshape(-1)               
                 link_idx = self.select_action(link_q)
                 offset = self.env.find_slot(link_idx)
 
@@ -152,7 +152,7 @@ class Trainer:
                 print(datetime.datetime.now().strftime('\n[%m-%d %H:%M:%S]'),
                       '---------- Copying parameters')
             if episode % args.save_record_step == 0:                                        # saving record for drawing
-                # self.save_record(episode)
+                self.save_record(episode)
                 print(datetime.datetime.now().strftime('[%m-%d %H:%M:%S]'),
                       '---------- Saving record')
             print('#' * 70)
@@ -166,8 +166,8 @@ class Trainer:
 
 
 def main():
-    # if os.path.exists('record'):
-    #     shutil.rmtree('record')
+    if os.path.exists('record'):
+        shutil.rmtree('record')
     trainer = Trainer()
     trainer.train()
 
