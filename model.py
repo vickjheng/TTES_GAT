@@ -12,19 +12,23 @@ class Model(nn.Module):
                                      device=device)
         self.gcn = GraphCNN(layer_dim=gcn_layer_dim,
                             device=device)
-        self.gat = GAT(nfeat = 4,           #in feature nums
+        
+        self.gat = GAT(nfeat = args.state_dim,           #in feature nums  
                        nhid = args.hidden, 
-                       nclass = 64,         # output size 
+                       nclass = q_layer_dim[0],         # output size 
                        dropout = args.dropout, 
                        nheads = args.nb_heads, 
                        alpha = args.gat_alpha,
                        device = device)
+        
         self.qnet = QNetwork(layer_dim=q_layer_dim,
                              device=device)
-
+        
     def forward(self, state, adjacent_matrix):
         # embed_state = self.gcn(self.link_bn(state), adjacent_matrix)
-        embed_state = self.gat(state, adjacent_matrix)  #!!!
+        embed_state = self.gat(state, adjacent_matrix)  
+        # print(f'---------------------------------\n{embed_state}\n----------------------------------')
         out = self.qnet(embed_state)
+        # print(out)
 
         return out

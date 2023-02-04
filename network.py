@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 class LinkBatchNorm(nn.Module):
     def __init__(self,
                  dim,
@@ -91,11 +90,11 @@ class GraphAttentionLayer(nn.Module):
         attention = F.dropout(attention, self.dropout, training=self.training)
         h_prime = torch.matmul(attention, Wh)
         if self.concat:
-            return F.elu(h_prime)
+            return F.elu(h_prime)               # normalization?
         else:
             return h_prime
 
-    def _prepare_attentional_mechanism_input(self, Wh):
+    def _prepare_attentional_mechanism_input(self, Wh):  # e: positional vector
         # Wh.shape (N, out_feature)
         # self.a.shape (2 * out_feature, 1)
         # Wh1&2.shape (N, 1)
@@ -128,7 +127,7 @@ class GAT(nn.Module):
         for i, attention in enumerate(self.attentions):
             self.add_module('attention_{}'.format(i), attention)
         self.out_att = GraphAttentionLayer(nhid * nheads, nclass, dropout=dropout, alpha=alpha, device = device,concat=False)
-                                         #( 8*8,64)
+                                         
         self.outsize = nhid * nheads
         self.to(device)
         
@@ -137,7 +136,7 @@ class GAT(nn.Module):
         x = F.dropout(x, self.dropout, training=self.training)
         peep = [att(x, adj) for att in self.attentions]
         x = torch.cat(peep, -1) #XXX
-        x = F.dropout(x, self.dropout, training=self.training)
+        # x = F.dropout(x, self.dropout, training=self.training)
         x = F.elu(self.out_att(x, adj))
         return F.log_softmax(x, dim=1)
     
@@ -158,3 +157,31 @@ class QNetwork(nn.Module):
         out = self.hid_layer_3(out)
 
         return out
+
+class LSTMQNetwork(nn.Module):
+    def __init__(self,
+                 layer_dim,
+                 device):
+        super().__init__()
+        # self.hid_layer_1 = nn.Linear(layer_dim[0], layer_dim[1])
+        self.hid_layer_2 = nn.Linear(layer_dim[1], layer_dim[2])
+        self.hid_layer_3 = nn.Linear(layer_dim[2], layer_dim[3])
+        self.lstm = nn.LSTM(input_size = 64,
+                            hidden_size =layer_dim[1],
+                            num_layers = 1,) # (Input, Hidden, Num Layers) ,Hidden size should be layer_dim[1]?
+        self.to(device)
+
+    def forward(self, embed_state, hidden_state, cell_state):
+        # out,(hn,cn) = self.lstm(embed_state)
+        batch,_,_ = embed_state.size()
+        xn = embed_state.unsqueeze(dim=0)
+        xn = xn.view(1,batch,-1)
+        out, (next_hidden_state, next_cell_state) = self.lstm(xn,(hidden_state.squeeze(dim=0),cell_state.squeeze(dim=0))) 
+                                                             
+        out = out.view(embed_state.size(1),-1)
+        # out = F.relu(self.hid_layer_1(embed_state))
+        out = F.relu(self.hid_layer_2(out))
+        out = self.hid_layer_3(out)
+
+        return out, next_hidden_state, next_cell_state
+    

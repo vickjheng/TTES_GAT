@@ -11,7 +11,8 @@ import torch.optim as optim
 from ladder import Ladder
 from env import Env
 from memory import Memory
-from model import Model
+# from model import Model
+from model_lstm import Model
 from param import args
 
 
@@ -21,24 +22,29 @@ class Trainer:
             self.device = torch.device('cuda')
         else:
             self.device = torch.device('cpu')
-        self.data = Ladder()
+        self.data = Ladder(node_num=8 ,
+                           flow_num=15 )
         self.data.read_file()
         self.env = Env(self.data)
         self.memory = Memory(args.capacity)
         self.eval_q = Model(gcn_layer_dim=args.gcn_layer_dim,
                             q_layer_dim=args.q_layer_dim,
                             device=self.device)
+        
         # self.eval_q = Model()
-        #TODO (self, in_features, out_features, dropout=args.dropout, alpha=args.gat_alpha, concat=True):
+
         self.target_q = deepcopy(self.eval_q)
         self.loss_function = nn.SmoothL1Loss()
         self.optimizer = optim.SGD(self.eval_q.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        # self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=args.lr_decay)
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=args.lr_decay)
         self.epsilon = args.epsilon
         self.env_record = {'success_rate': [], 'usage': [], 'reward': []}
         self.training_record = []
         self.scalar = []
-
+        
+        # get initial h0,c0
+        self.hidden_state, self.cell_state = self.env.init_states()
+        
     @torch.no_grad()
     def generate_experience(self):
         print(datetime.datetime.now().strftime('\n[%m-%d %H:%M:%S]'),
@@ -54,18 +60,26 @@ class Trainer:
             while True:
                 adjacent_matrix = torch.from_numpy(self.env.graph.link_adjacent_matrix).unsqueeze(dim=0).float().to(self.device)
                 # adjacent_matrix = torch.from_numpy(self.env.graph.link_adjacent_matrix).float().to(self.device)
-                link_q = self.eval_q(state.unsqueeze(dim=0).to(self.device), adjacent_matrix).reshape(-1)
-                # link_q = self.eval_q((state).to(self.device), adjacent_matrix).reshape(-1)               
+                # link_q = self.eval_q(state.unsqueeze(dim=0).to(self.device), adjacent_matrix).reshape(-1)
+                
+                # TODO lstm version 
+                link_q,self.hidden_state, self.cell_state = \
+                    self.eval_q(state.unsqueeze(dim=0).to(self.device),
+                    adjacent_matrix,
+                    self.hidden_state,
+                    self.cell_state).reshape(-1)
+                
+                
                 link_idx = self.select_action(link_q)
                 offset = self.env.find_slot(link_idx)
 
                 current_state = state
                 mask = self.env.find_valid_link()
-                done, reward, state = self.env.update([link_idx, offset])
+                done, reward, state, terminal = self.env.update([link_idx, offset])
                 # print(reward)
 
                 action_transition.append([link_idx, offset])
-                self.memory.push(current_state, link_idx, reward, state, mask)  # store (s, a, r, s', mask)
+                self.memory.push(current_state, link_idx, reward, state, mask,terminal)  # store (s, a, r, s', mask)
 
                 if done == 1:                                                   # successfully scheduled
                     for action in action_transition:
@@ -101,11 +115,11 @@ class Trainer:
     def train_one_episode(self):
         print(datetime.datetime.now().strftime('\n[%m-%d %H:%M:%S]'),
               '---------- Training memory')
-        self.eval_q.train()
-        #!!!
+        self.eval_q.train()                         # training mode
+        
         if len(self.memory) < args.batch_size:
             return
-        state_batch, action_batch, reward_batch, next_state_batch, mask_batch = self.memory.sample(args.batch_size, self.device)
+        state_batch, action_batch, reward_batch, next_state_batch, mask_batch, terminal_batch = self.memory.sample(args.batch_size, self.device)
 
         # update eval_q
         self.eval_q.zero_grad()
@@ -115,10 +129,10 @@ class Trainer:
         max_q = []
         for q, mask in zip(target_q, mask_batch):
             max_q.append(torch.max(torch.take(q, torch.LongTensor(mask).to(self.device))))
-        target_q = (reward_batch + args.gamma * torch.stack(max_q)).detach()
+        target_q = (reward_batch + args.gamma * torch.stack(max_q)*(1-terminal_batch)).detach()
 
-        # for idx in range(len(current_q)):
-        #     print('{:+.4f}/{:+.4f}'.format(current_q[idx].item(), target_q[idx].item()))
+        for idx in range(len(current_q)):
+            print('{:+.4f}/{:+.4f}'.format(current_q[idx].item(), target_q[idx].item()))
 
         loss = self.loss_function(current_q, target_q)
         loss.backward()
@@ -143,8 +157,8 @@ class Trainer:
             self.train_one_episode()
             print('Time: {:.2f}s'.format(time.time() - start_time))
 
-            # if episode > args.lr_decay_start_episode:                                    # lr decay after exploration
-            #     self.scheduler.step()
+            if episode > args.lr_decay_start_episode:                                    # lr decay after exploration
+                self.scheduler.step()
             if self.epsilon > args.end_epsilon:  # epsilon decay while exploration
                 self.epsilon *= args.epsilon_decay
             if episode % args.update_target_q_step == 0:                                    # copy parameters to target_q
@@ -152,22 +166,28 @@ class Trainer:
                 print(datetime.datetime.now().strftime('\n[%m-%d %H:%M:%S]'),
                       '---------- Copying parameters')
             if episode % args.save_record_step == 0:                                        # saving record for drawing
-                self.save_record(episode)
                 print(datetime.datetime.now().strftime('[%m-%d %H:%M:%S]'),
                       '---------- Saving record')
+                # self.save_record(episode)
+                # FILE = f'./model_save_16units/model_{episode}.pt'
+                # torch.save(self.eval_q, FILE)
             print('#' * 70)
 
+                
     def save_record(self, episode):
         if not os.path.exists('record/env'):
             os.makedirs('record/env')
         for key in self.env_record.keys():
             np.save(f'record/env/{key}_{episode}.npy', self.env_record[key])
         np.save(f'record/loss_{episode}.npy', self.training_record)
+    
 
+        
+    
 
 def main():
-    if os.path.exists('record'):
-        shutil.rmtree('record')
+    # if os.path.exists('record'):
+    #     shutil.rmtree('record')
     trainer = Trainer()
     trainer.train()
 

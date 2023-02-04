@@ -6,11 +6,15 @@ from param import args
 
 
 class Ladder:
-    def __init__(self):
+    def __init__(self,
+                 node_num=8 ,
+                 flow_num=15 ):
         self.node_matrix = []
         self.node_info = {}
         self.flow_info = {}
-
+        self.node_num = node_num
+        self.flow_num = flow_num
+        
     def generate_node_matrix(self, node_num):
         self.node_matrix = np.zeros((node_num, node_num))
         links = []
@@ -45,11 +49,11 @@ class Ladder:
             delay = random.randint(flow_delay[0], flow_delay[1])
             self.flow_info[flow_idx] = [src, dst, length, prd, delay]
 
-    def generate_all_data(self, node_num, flow_num, flow_len, flow_prd, flow_delay):
-        self.generate_node_matrix(node_num)
-        self.generate_node_info(node_num)
-        for num in range(flow_num):
-            self.generate_flow_info(num, node_num, flow_num, flow_len, flow_prd, flow_delay)
+    def generate_all_data(self,  flow_len, flow_prd, flow_delay):
+        self.generate_node_matrix(self.node_num)
+        self.generate_node_info(self.node_num)
+        for num in range(self.flow_num):
+            self.generate_flow_info(num, self.node_num, self.flow_num, flow_len, flow_prd, flow_delay)
         np.save('data/node_matrix.npy', self.node_matrix)
         json.dump(self.node_info, open('data/node_info.json', 'w'), indent=4)
         json.dump(self.flow_info, open('data/flow_info.json', 'w'), indent=4)
@@ -63,12 +67,12 @@ class Ladder:
 
 def main():
     data = Ladder()
-    node_num = 8
-    flow_num = 15
+    # node_num = 8
+    # flow_num = 15   #TODO origin: 15
     if not os.path.exists('data'):
         os.makedirs('data')
-    data.generate_all_data(node_num, flow_num, args.flow_len, args.flow_prd, args.flow_delay)
-
+    # data.generate_all_data(node_num, flow_num, args.flow_len, args.flow_prd, args.flow_delay)
+    data.generate_all_data(args.flow_len, args.flow_prd, args.flow_delay)
 
 if __name__ == '__main__':
     main()
