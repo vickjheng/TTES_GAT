@@ -9,9 +9,9 @@ class Actor(nn.Module):
                  lr,
                  device):
         super().__init__()
-        self.edge_bn = EdgeBatchNorm(dim=6,
+        self.edge_bn = EdgeBatchNorm(dim=4,
                                      device=device)
-        self.mlp = MLP(layer_dim=[6, 64, 8, 1],
+        self.mlp = MLP(layer_dim=[4, 64, 8, 1],
                               device=device)
         self.optimizer = optim.SGD(self.parameters(), lr=lr, weight_decay=5e-4)
 
@@ -33,8 +33,8 @@ class Critic(nn.Module):
                  lr,
                  device):
         super().__init__()
-        layer_dim = [120, 64, 4, 1]
-        self.edge_bn = EdgeBatchNorm(dim=6,
+        layer_dim = [128, 64, 4, 1]
+        self.edge_bn = EdgeBatchNorm(dim=4,
                                      device=device)
         self.hid_layer_1 = nn.Linear(layer_dim[0], layer_dim[1])
         self.hid_layer_2 = nn.Linear(layer_dim[1], layer_dim[2])

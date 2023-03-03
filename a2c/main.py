@@ -6,14 +6,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ladder import Ladder
+# from A380 import A380
 from env import Env
 from model import Actor, Critic
-
+import random
 
 class Trainer:
     def __init__(self):
         self.device = torch.device('cuda')
         self.data = Ladder()
+        # self.data = A380()
         self.data.generate_all_data()
         self.env = Env(self.data)
         self.actor = Actor(lr=0.0001,
@@ -32,9 +34,12 @@ class Trainer:
         loss_record = {'pi_loss': [], 'v_loss': []}
         
         check_record = {'flow_info': [],'action': [],'done': []}
-        for idx in range(len(self.data.flow_info)):
-            
-            check_record['flow_info'].append(self.data.flow_info[idx])
+        
+        flow_indices = [idx for idx in self.data.flow_info]
+        random.shuffle(flow_indices)
+    
+        for idx in flow_indices:          
+            # check_record['flow_info'].append(self.data.flow_info[idx])
             
             self.env.get_info(idx)
             state = self.env.get_state()
@@ -48,13 +53,18 @@ class Trainer:
                 actions = \
                     self.actor.valid_choice(state.unsqueeze(dim=0).to(self.device), mask)
                 action, log_prob = self.select_action(actions, mask)
-                check_record['action'].append(action)
+                
+                offset = self.env.find_slot(action)
+                
+                # print(offset)
+                action_transition.append([action, offset])
+
                 # critic
                 value = self.critic(state.unsqueeze(dim=0).to(self.device))
 
-                done, reward, state = self.env.step(action)
+                done, reward, state = self.env.step(action, offset)
 
-                check_record['done'].append(done)
+
                 if done == 0:
                 # critic
                     next_value = self.critic(state.unsqueeze(dim=0).to(self.device))
@@ -78,17 +88,16 @@ class Trainer:
                 loss_record['pi_loss'].append(actor_loss.item())
                 loss_record['v_loss'].append(critic_loss.item())
 
-                action_transition.append(action)
+                # action_transition.append(action)
                              
                 if done == 1:
+                    # for action in action_transition:
+                    #     self.env.graph.edges[action].slot_num -= 1
                     for action in action_transition:
-                        self.env.graph.edges[action].slot_num -= 1
-                    print(check_record)
-                    check_record = {'flow_info': [],'action': [],'done': []}
+                        self.env.occupy_slot(action)
                     break
                 elif done == -1:
-                    print(check_record)
-                    check_record = {'flow_info': [],'action': [],'done': []}
+
                     break
                 elif done == 0:
                     continue
@@ -101,13 +110,19 @@ class Trainer:
         self.record['rate'].append(success_rate)
         mean_pi_loss = sum(loss_record['pi_loss']) / len(loss_record['pi_loss'])
         mean_v_loss = sum(loss_record['v_loss']) / len(loss_record['v_loss'])
-
+        
+        count_delay = self.env.count_delay / len(self.data.flow_info)
+        count_full = self.env.count_full / len(self.data.flow_info)
+        
         print(datetime.datetime.now().strftime('\n[%m-%d %H:%M:%S]'),
               'Reward: {:+.02f} |'.format(reward),
               'Rate: {:.02f}'.format(success_rate))
         print(datetime.datetime.now().strftime('[%m-%d %H:%M:%S]'),
               'Pi Loss: {:+.04f} |'.format(mean_pi_loss),
               'V Loss: {:.04f}'.format(mean_v_loss))
+        print(datetime.datetime.now().strftime('[%m-%d %H:%M:%S]'),
+              'Over delay: {:.02f}% |'.format(count_delay*100),
+              'No space: {:.02f}%'.format(count_full*100))
 
     @staticmethod
     def select_action(actions, mask):
@@ -126,7 +141,7 @@ class Trainer:
 
             self.train_one_episode()
 
-            # self.save_record(episode)
+            self.save_record(episode)
             print('#' * 60)
 
     def save_record(self, episode):
@@ -138,8 +153,8 @@ class Trainer:
 
 
 def main():
-    # if os.path.exists('record'):
-    #     shutil.rmtree('record')
+    if os.path.exists('record'):
+        shutil.rmtree('record')
     trainer = Trainer()
     trainer.train()
 
