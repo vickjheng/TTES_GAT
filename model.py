@@ -1,34 +1,51 @@
+import torch
 import torch.nn as nn
-from network import GraphCNN, LinkBatchNorm, QNetwork,GAT
-from param import args
+import torch.optim as optim
+from network import EdgeBatchNorm, MLP
 
-class Model(nn.Module):
+
+class Actor(nn.Module):
     def __init__(self,
-                 gcn_layer_dim,
-                 q_layer_dim,
+                 lr,
                  device):
         super().__init__()
-        self.link_bn = LinkBatchNorm(dim=gcn_layer_dim[0],
+        self.edge_bn = EdgeBatchNorm(dim=4,
                                      device=device)
-        self.gcn = GraphCNN(layer_dim=gcn_layer_dim,
-                            device=device)
-        
-        self.gat = GAT(nfeat = args.state_dim,           #in feature nums  
-                       nhid = args.hidden, 
-                       nclass = q_layer_dim[0],         # output size 
-                       dropout = args.dropout, 
-                       nheads = args.nb_heads, 
-                       alpha = args.gat_alpha,
-                       device = device)
-        
-        self.qnet = QNetwork(layer_dim=q_layer_dim,
-                             device=device)
-        
-    def forward(self, state, adjacent_matrix):
-        # embed_state = self.gcn(self.link_bn(state), adjacent_matrix)
-        embed_state = self.gat(state, adjacent_matrix)  
-        # print(f'---------------------------------\n{embed_state}\n----------------------------------')
-        out = self.qnet(embed_state)
-        # print(out)
+        self.mlp = MLP(layer_dim=[4, 64, 8, 1],
+                              device=device)
+        self.optimizer = optim.SGD(self.parameters(), lr=lr, weight_decay=5e-4)
+
+    def forward(self, state):
+        out = self.edge_bn(state)
+        out = self.mlp(out)
+
+        return out
+
+    def valid_choice(self, state, mask):
+        out = self.forward(state)
+        valid_choice = torch.take(out.cpu(), torch.LongTensor(mask))
+
+        return valid_choice
+
+
+class Critic(nn.Module):
+    def __init__(self,
+                 lr,
+                 device):
+        super().__init__()
+        layer_dim = [128, 64, 4, 1]
+        self.edge_bn = EdgeBatchNorm(dim=4,
+                                     device=device)
+        self.hid_layer_1 = nn.Linear(layer_dim[0], layer_dim[1])
+        self.hid_layer_2 = nn.Linear(layer_dim[1], layer_dim[2])
+        self.hid_layer_3 = nn.Linear(layer_dim[2], layer_dim[3])
+        self.optimizer = optim.SGD(self.parameters(), lr=lr, weight_decay=5e-4)
+        self.to(device)
+
+    def forward(self, state):
+        out = self.edge_bn(state).reshape(-1).detach()
+        out = torch.tanh(self.hid_layer_1(out))
+        out = torch.tanh(self.hid_layer_2(out))
+        out = self.hid_layer_3(out)
 
         return out
