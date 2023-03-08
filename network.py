@@ -1,8 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from layers import GraphAttentionLayer
 
-class LinkBatchNorm(nn.Module):
+
+class EdgeBatchNorm(nn.Module):
     def __init__(self,
                  dim,
                  device):
@@ -13,8 +15,38 @@ class LinkBatchNorm(nn.Module):
     def forward(self, x):
         out = x.transpose(1, 2).contiguous()
         out = self.batch_norm(out).transpose(1, 2).contiguous()
-        return out
 
+        return out
+class QNetwork_conv(nn.Module):
+    def __init__(self,
+                 layer_dim,
+                 device):
+        super().__init__()
+        self.hid_layer_1 = nn.Conv2d(in_channels = layer_dim[0], out_channels = layer_dim[1], kernel_size = 1)
+        self.to(device)
+        
+    def forward(self, state):
+        out = torch.tanh(self.hid_layer_1(state))
+        return out
+    
+class QNetwork(nn.Module):
+    def __init__(self,
+                 layer_dim,
+                 device):
+        super().__init__()
+        self.hid_layer_1 = nn.Linear(layer_dim[0], layer_dim[1])
+        self.hid_layer_2 = nn.Linear(layer_dim[1], layer_dim[2])
+        self.hid_layer_3 = nn.Linear(layer_dim[2], layer_dim[3])
+        self.to(device)
+
+    def forward(self, state):
+        # out = F.relu(self.hid_layer_1(state))
+        # out = F.relu(self.hid_layer_2(out))
+        out = torch.tanh(self.hid_layer_1(state))
+        out = torch.tanh(self.hid_layer_2(out))
+        out = self.hid_layer_3(out).squeeze()
+
+        return out
 
 class GraphCNNLayer(nn.Module):
     def __init__(self,
@@ -51,137 +83,61 @@ class GraphCNN(nn.Module):
 
         return out
     
-class GraphAttentionLayer(nn.Module):
+class lstmNetwork(nn.Module): 
     """
-    Simple GAT layer, similar to https://arxiv.org/abs/1710.10903
+        h_t = relu( fc(h_t_prev) + fc(g_t))
+        input_size: input size of the rnn
+        hidden_size: hidden size of the rnn(256)
+        g_t: 2D tensor of shape (B, hidden_size). Returned from glimpse network.
+        h_prev: 2D tensor of shape (B, hidden_size). Hidden state for previous timestep.
+        h_t: 2D tensor of shape (B, hidden_size). Hidden state for current timestep.
     """
-    def __init__(self, 
-                 in_features, 
-                 out_features,
-                 dropout, 
-                 alpha,
-                 device,
-                 concat=True):
-        
-        super(GraphAttentionLayer, self).__init__()
-
-        self.dropout = dropout
-        self.in_features = in_features
-        self.out_features = out_features
-        self.alpha = alpha
-        self.concat = concat
-
-        self.W = nn.Parameter(torch.empty(size=(in_features, out_features)))
-        nn.init.xavier_uniform_(self.W.data, gain=1.414)
-        self.a = nn.Parameter(torch.empty(size=(2*out_features, 1)))
-        nn.init.xavier_uniform_(self.a.data, gain=1.414)
-        self.leakyrelu = nn.LeakyReLU(self.alpha)
+    
+    def __init__(self, hidden_size, device):
+        super().__init__()
+        self.lstm = nn.LSTMCell(hidden_size, hidden_size)
         self.to(device)
+
+    def forward(self, x_t, h_prev, c_prev): 
+        h_t, c_t = self.lstm(x_t, (h_prev.detach(), c_prev.detach()))
         
-    def forward(self, h, adj):
-        batch_size,_,_ = h.shape 
-        # print(f'---------------\nh.size: {h.size()}\nself.W.size: {self.W.size()}')
-        Wh = torch.bmm(h, self.W.repeat(batch_size, 1, 1)) # h.shape: (N, in_features), Wh.shape: (N, out_features)
-        e = self._prepare_attentional_mechanism_input(Wh)
-
-        zero_vec = -9e15*torch.ones_like(e)
-        attention = torch.where(adj > 0, e, zero_vec)
-        attention = F.softmax(attention, dim=1)
-        attention = F.dropout(attention, self.dropout, training=self.training)
-        h_prime = torch.matmul(attention, Wh)
-        if self.concat:
-            return F.elu(h_prime)               # normalization?
-        else:
-            return h_prime
-
-    def _prepare_attentional_mechanism_input(self, Wh):  # e: positional vector
-        # Wh.shape (N, out_feature)
-        # self.a.shape (2 * out_feature, 1)
-        # Wh1&2.shape (N, 1)
-        # e.shape (N, N)
-        Wh1 = torch.matmul(Wh, self.a[:self.out_features, :])
-        Wh2 = torch.matmul(Wh, self.a[self.out_features:, :])
-        # broadcast add
-        # e = Wh1 + Wh2.T
-        e = Wh1 + Wh2.transpose(1,2)
-        return self.leakyrelu(e)
-
-    def __repr__(self):
-        return self.__class__.__name__ + ' (' + str(self.in_features) + ' -> ' + str(self.out_features) + ')'
-
-class GAT(nn.Module):
+        return h_t, c_t
+    
+class EGAT(nn.Module):
     def __init__(self, 
                  nfeat,
+                 ef_sz, 
                  nhid,
-                 nclass,
-                 dropout,
-                 alpha,
+                 nclass, 
+                 dropout, 
+                 alpha, 
                  nheads,
                  device):
-        
-        """Dense version of GAT."""
-        super(GAT, self).__init__()
-        
+        """
+        Dense version of GAT.
+        nfeat输入节点的特征向量长度，标量
+        ef_sz输入edge特征矩阵的大小，列表，PxNxN
+        nhid隐藏节点的特征向量长度，标量
+        nclass输出节点的特征向量长度，标量
+        dropout：drpout的概率
+        alpha：leakyrelu的第三象限斜率
+        nheads：attention_head的个数
+        """
+        super(EGAT, self).__init__()
         self.dropout = dropout
-        self.attentions = [GraphAttentionLayer(nfeat, nhid, dropout=dropout, alpha=alpha, concat=True,device = device) for _ in range(nheads)]
+        self.attentions = [GraphAttentionLayer(nfeat, nhid, dropout=dropout, alpha=alpha, concat=True) for _ in range(nheads)]
         for i, attention in enumerate(self.attentions):
             self.add_module('attention_{}'.format(i), attention)
-        self.out_att = GraphAttentionLayer(nhid * nheads, nclass, dropout=dropout, alpha=alpha, device = device,concat=False)
-                                         
-        self.outsize = nhid * nheads
+        self.out_att = GraphAttentionLayer(nhid*nheads*ef_sz[0], nclass, dropout=dropout, alpha=alpha, concat=False)
         self.to(device)
         
-    def forward(self, x, adj):
-        batch_size,states_num,_ = x.shape
+    def forward(self, x, edge_attr):
         x = F.dropout(x, self.dropout, training=self.training)
-        peep = [att(x, adj) for att in self.attentions]
-        x = torch.cat(peep, -1) #XXX
-        # x = F.dropout(x, self.dropout, training=self.training)
-        x = F.elu(self.out_att(x, adj))
+        temp_x=[]
+        for att in self.attentions:
+            inn_x,edge_attr=att(x, edge_attr)
+            temp_x.append(inn_x)
+        x = torch.cat(temp_x, dim=1)
+        x = F.dropout(x, self.dropout, training=self.training)
+        x = F.elu(self.out_att(x, edge_attr))
         return F.log_softmax(x, dim=1)
-    
-    
-class QNetwork(nn.Module):
-    def __init__(self,
-                 layer_dim,
-                 device):
-        super().__init__()
-        self.hid_layer_1 = nn.Linear(layer_dim[0], layer_dim[1])
-        self.hid_layer_2 = nn.Linear(layer_dim[1], layer_dim[2])
-        self.hid_layer_3 = nn.Linear(layer_dim[2], layer_dim[3])
-        self.to(device)
-
-    def forward(self, embed_state):
-        out = F.relu(self.hid_layer_1(embed_state))
-        out = F.relu(self.hid_layer_2(out))
-        out = self.hid_layer_3(out)
-
-        return out
-
-class LSTMQNetwork(nn.Module):
-    def __init__(self,
-                 layer_dim,
-                 device):
-        super().__init__()
-        # self.hid_layer_1 = nn.Linear(layer_dim[0], layer_dim[1])
-        self.hid_layer_2 = nn.Linear(layer_dim[1], layer_dim[2])
-        self.hid_layer_3 = nn.Linear(layer_dim[2], layer_dim[3])
-        self.lstm = nn.LSTM(input_size = 64,
-                            hidden_size =layer_dim[1],
-                            num_layers = 1,) # (Input, Hidden, Num Layers) ,Hidden size should be layer_dim[1]?
-        self.to(device)
-
-    def forward(self, embed_state, hidden_state, cell_state):
-        # out,(hn,cn) = self.lstm(embed_state)
-        batch,_,_ = embed_state.size()
-        xn = embed_state.unsqueeze(dim=0)
-        xn = xn.view(1,batch,-1)
-        out, (next_hidden_state, next_cell_state) = self.lstm(xn,(hidden_state.squeeze(dim=0),cell_state.squeeze(dim=0))) 
-                                                             
-        out = out.view(embed_state.size(1),-1)
-        # out = F.relu(self.hid_layer_1(embed_state))
-        out = F.relu(self.hid_layer_2(out))
-        out = self.hid_layer_3(out)
-
-        return out, next_hidden_state, next_cell_state
-    

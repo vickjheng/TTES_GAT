@@ -1,34 +1,51 @@
+import torch
 import torch.nn as nn
-from network import GraphCNN, LinkBatchNorm, QNetwork,GAT
-from param import args
+import torch.optim as optim
+from network import EdgeBatchNorm, QNetwork, EGAT, QNetwork_conv
+
 
 class Model(nn.Module):
     def __init__(self,
-                 gcn_layer_dim,
-                 q_layer_dim,
+                 lr,
                  device):
         super().__init__()
-        self.link_bn = LinkBatchNorm(dim=gcn_layer_dim[0],
+        self.edge_bn = EdgeBatchNorm(dim=4,
                                      device=device)
-        self.gcn = GraphCNN(layer_dim=gcn_layer_dim,
-                            device=device)
+        # self.q_net = QNetwork(layer_dim=[16, 16, 4, 1],
+        #                       device=device)
+        self.q_net_conv = QNetwork_conv(layer_dim=[16, 1],
+                                        device=device)
+        self.optimizer = optim.RMSprop(self.parameters(), lr=lr, weight_decay=5e-4)
         
-        self.gat = GAT(nfeat = args.state_dim,           #in feature nums  
-                       nhid = args.hidden, 
-                       nclass = q_layer_dim[0],         # output size 
-                       dropout = args.dropout, 
-                       nheads = args.nb_heads, 
-                       alpha = args.gat_alpha,
-                       device = device)
-        
-        self.qnet = QNetwork(layer_dim=q_layer_dim,
-                             device=device)
-        
-    def forward(self, state, adjacent_matrix):
-        # embed_state = self.gcn(self.link_bn(state), adjacent_matrix)
-        embed_state = self.gat(state, adjacent_matrix)  
-        # print(f'---------------------------------\n{embed_state}\n----------------------------------')
-        out = self.qnet(embed_state)
-        # print(out)
-
+        self.egat = EGAT(nfeat = 4,             # args.state_dim,             
+                        ef_sz = (3,12,12),      # tuple(edge_attr.shape)   
+                        nhid  = 16, 
+                        nclass = 16,             # output size 
+                        dropout = 0.6, 
+                        nheads = 4, 
+                        alpha = 0.2,
+                        device = device)
+                        
+    
+    def forward(self, state):
+        # out = self.edge_bn(state)
+        # out = self.q_net(state)
+        out = self.q_net_conv(state)
         return out
+
+    # def valid_choice(self, state, mask):
+    #     out = self.forward(state)
+    #     valid_choice = torch.take(out.cpu(), torch.LongTensor(mask))
+
+    #     return valid_choice
+    
+    def valid_choice(self, node_feature, edge_attr, mask):
+        state = self.egat(node_feature, edge_attr)
+        # state = state.unsqueeze(dim=2)
+        # state = state.unsqueeze(dim=3)
+        state = state.view(1,state.size()[0],state.size()[1],1).permute(0,2,1,3)
+        out = self.forward(state)
+        out = out.reshape(12,-1)
+        valid_choice = torch.take(out.cpu(), torch.LongTensor(mask))
+
+        return valid_choice

@@ -1,65 +1,82 @@
 import numpy as np
-from node import Node
-from link import Link
+
+
+class Node:
+    def __init__(self, idx):
+        self.idx = idx
+        self.buffer_size = 20
+
+class Edge:
+    def __init__(self, idx, start_node, end_node):
+        self.idx = idx
+        self.start_node = start_node
+        self.end_node = end_node
+        self.slot_num = 15
 
 
 class Graph:
     def __init__(self, data):
         self.data = data
+
         self.nodes = {}
-        self.node_adjacent_matrix = []
-        self.links = {}
-        self.link_adjacent_matrix = []
-        self.link_distance_matrix = []
+        self.node_adj_matrix = []
+        self.edges = {}
+        self.edge_adj_matrix = []
+        self.edge_dist_matrix = []
+
         self.load_nodes()
-        self.load_node_adjacent_matrix()
-        self.get_links()
-        self.get_link_distance_matrix()
+        self.load_node_adj_matrix()
+        self.get_edges()
+        self.get_edge_dist_matrix()
 
     def load_nodes(self):
         self.nodes = {}
-        for idx, capacity in self.data.node_info.items():
-            self.nodes[idx] = Node(int(idx), capacity)
+        node_num = len(self.data.node_matrix)
+        for idx in range(node_num):
+            self.nodes[idx] = Node(int(idx))
 
-    def load_node_adjacent_matrix(self):
-        self.node_adjacent_matrix = self.data.node_matrix
+    def load_node_adj_matrix(self):
+        self.node_adj_matrix = self.data.node_matrix
 
-    def get_links(self):
-        self.links = {}
-        node_num = len(self.node_adjacent_matrix)
+    def get_edges(self):
+        self.edges = {}
+        node_num = len(self.node_adj_matrix)
         start_from_node = {}
         for idx in range(node_num):
             start_from_node[idx] = []
         idx = 0
         for i in range(node_num):
             for j in range(node_num):
-                if self.node_adjacent_matrix[i][j] == 0 or i == j:
+                if self.node_adj_matrix[i][j] == 0 or i == j:
                     continue
-                self.links[idx] = Link(idx, self.nodes[f'{i}'], self.nodes[f'{j}'])
+                self.edges[idx] = Edge(idx, self.nodes[i], self.nodes[j])
                 start_from_node[i].append(idx)
                 idx += 1
-        link_num = idx
-        self.link_adjacent_matrix = np.zeros([link_num, link_num])
-        for i in range(link_num):
-            for j in start_from_node[self.links[i].end_node.idx]:
-                self.link_adjacent_matrix[i][j] = 1
+        edge_num = idx
+        self.edge_adj_matrix = np.zeros([edge_num, edge_num])
+        for i in range(edge_num):
+            for j in start_from_node[self.edges[i].end_node.idx]:
+                self.edge_adj_matrix[i][j] = 1
 
-    def get_link_distance_matrix(self):
+    def get_edge_dist_matrix(self):
         node_num = len(self.nodes)
-        link_num = len(self.links)
-        self.link_distance_matrix = np.full([link_num, node_num], 999)
-        for idx in range(link_num):
-            visited_links = [idx]
-            current_list = [self.links[idx]]
+        edge_num = len(self.edges)
+        self.edge_dist_matrix = np.full([edge_num, node_num], 999)
+
+        for idx in range(edge_num):
+            visited_edges = [idx]
+            curr_list = [self.edges[idx]]
             distance = 1
-            self.link_distance_matrix[idx][self.links[idx].start_node.idx] = 0
-            while len(current_list) > 0:
+            self.edge_dist_matrix[idx][self.edges[idx].start_node.idx] = 0
+            while len(curr_list) > 0:
                 next_list = []
-                for current_link in current_list:
-                    self.link_distance_matrix[idx][current_link.end_node.idx] = min(self.link_distance_matrix[idx][current_link.end_node.idx], distance)
-                    for adjacent_idx in range(link_num):
-                        if self.link_adjacent_matrix[current_link.idx][adjacent_idx] == 1 and adjacent_idx not in visited_links:
-                            visited_links.append(adjacent_idx)
-                            next_list.append(self.links[adjacent_idx])
-                current_list = next_list
+                for curr_edge in curr_list:
+                    self.edge_dist_matrix[idx][curr_edge.end_node.idx] = \
+                        min(self.edge_dist_matrix[idx][curr_edge.end_node.idx], distance)
+                    for adj_idx in range(edge_num):
+                        if self.edge_adj_matrix[curr_edge.idx][adj_idx] == 1 \
+                                and adj_idx not in visited_edges:
+                            visited_edges.append(adj_idx)
+                            next_list.append(self.edges[adj_idx])
+                curr_list = next_list
                 distance += 1
