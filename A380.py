@@ -4,17 +4,15 @@ import numpy as np
 
 class A380:
     def __init__(self,
-                 node_num=12,        # fix node numbers
-                 flow_num=100):
+                 node_num=12,
+                 flow_num=20):
         self.node_num = node_num
         self.flow_num = flow_num
 
         self.node_matrix = []
         self.flow_info = {}
-        self.node_info = {}
-        self.flow_prd = [4, 8, 16, 32, 64, 128, 256, 512, 1024]
-        self.flow_len = [1,16]
-        self.flow_delay = [1024, 4096]
+
+        self.generate_all_data()
 
     def generate_node_matrix(self):
         self.node_matrix = np.zeros((self.node_num, self.node_num))
@@ -26,46 +24,21 @@ class A380:
         for link in links:
             self.node_matrix[link[0], link[1]] = 1
             self.node_matrix[link[1], link[0]] = 1
-
+        print(self.node_matrix)
+        
     def generate_flow_info(self):
-        flow_prd = self.flow_prd
-        flow_len = self.flow_len
-        flow_delay = self.flow_delay
         for idx in range(self.flow_num):
             src = random.randint(0, self.node_num - 1)
             dst = random.randint(0, self.node_num - 1)
             while src == dst:
                 dst = random.randint(0, self.node_num - 1)
-            prd = flow_prd[random.randint(0, len(flow_prd) - 1)]
-            length = random.randint(flow_len[0], flow_len[1])
-            delay = random.randint(flow_delay[0], flow_delay[1])
-            
-            self.flow_info[idx] = [src, dst, length, prd, delay]
-        # self.flow_info = dict(sorted(self.flow_info.items(), key = lambda x: x[1][2],reverse=True))
-        
-        # record=np.zeros(16)
-        # for i in range(16):
-        #     for j in self.flow_info :
-        #         if self.flow_info[j][2]==i+1:
-        #             record[i]+=1
-        # record=list(reversed(record))
-        # r=0
-        # tmp = []
-        # sorted_flow={}
-        # for i in range(len(record)):
-        #     l = int(record[i])
-        #     if l>1:
-        #         # s=[i for i in list(self.flow_info.keys())[r:r+l]]
-        #         tmp = dict(list(self.flow_info.items())[r:r+l])
-        #         tmp = dict(sorted(tmp.items(), key=lambda x: abs(x[1][0]-x[1][1]),reverse=True))
-        #         # print(tmp)
-        #         sorted_flow.update(tmp)
-        #         r+=l
-        #     else:
-        #         r+=l
-        #         continue
-        # self.flow_info = sorted_flow
-        
+
+            self.flow_info[idx] = [src, dst]
+
     def generate_all_data(self):
         self.generate_node_matrix()
         self.generate_flow_info()
+
+# if __name__ == '__main__':
+#     t = A380()
+#     t.generate_node_matrix()

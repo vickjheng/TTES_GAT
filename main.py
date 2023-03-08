@@ -1,103 +1,121 @@
 import os
 import shutil
 import datetime
+import random
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from ladder import Ladder
-# from A380 import A380
 from env import Env
-from model import Actor, Critic
-import random
+from model import Model
+
 
 class Trainer:
     def __init__(self):
         self.device = torch.device('cuda')
         self.data = Ladder()
-        # self.data = A380()
         self.data.generate_all_data()
         self.env = Env(self.data)
-        self.actor = Actor(lr=0.0001,
+        self.model = Model(lr=0.0001,
                            device=self.device)
-        self.critic = Critic(lr=0.0001,
-                             device=self.device)
         self.loss_function = nn.SmoothL1Loss()
-        self.record = {'reward': [], 'rate': [], 'pi_loss': [], 'v_loss': []}
+        self.epsilon = 1.0
+        self.batch_size = 32
+        self.train_record = {'reward': [], 'loss': [], 'success_rate': []}
+        self.val_reward = []
+        # self.hidden_state, self.cell_state = self.env.init_states()
 
     def train_one_episode(self):
-        self.actor.train()
-        self.critic.train()
+        self.model.train()
+        self.model.optimizer.zero_grad()
 
+        # self.data.generate_all_data()
+        # self.env = Env(self.data)
         self.env.reset()
 
-        loss_record = {'pi_loss': [], 'v_loss': []}
-        
-        check_record = {'flow_info': [],'action': [],'done': []}
-        
-        flow_indices = [idx for idx in self.data.flow_info]
-        random.shuffle(flow_indices)
-    
-        for idx in flow_indices:          
-            # check_record['flow_info'].append(self.data.flow_info[idx])
-            
-            self.env.get_info(idx)
-            state = self.env.get_state()
-            action_transition = []
+        loss_record = []
 
+        for idx in range(len(self.data.flow_info)):
+            self.env.get_info(idx)
+            # state = self.env.get_state()
+            node_feature,edge_attr = self.env.get_state()
+            action_transition = []
+            tmp = []
+            check_record = {'flow_info': [],'action': [],'done': []}
+            ctrl_gate = 0
             while True:
-                mask = self.env.find_valid_edge()
+                check_record['flow_info'].append(self.data.flow_info[idx])
+                # mask = self.env.find_valid_edge()
+                mask = self.env.find_valid_node()
+                
+                # actions = \
+                #     self.model.valid_choice(state.unsqueeze(dim=0).to(self.device), mask)
                 if not mask:
                     break
-                # actor
-                actions = \
-                    self.actor.valid_choice(state.unsqueeze(dim=0).to(self.device), mask)
-                action, log_prob = self.select_action(actions, mask)
+                if ctrl_gate and len(mask)>1:
+                    for choice in mask:
+                        edge = self.env.convert_to_edge(choice)
+                        tmp.append(self.env.graph.edge_dist_matrix[edge][self.env.dst])
+                    pickout = max(tmp)
+                    pickout = tmp.index(pickout)
+                    # print('pickout: ',pickout)
+                    del mask[pickout]
                 
-                offset = self.env.find_slot(action)
+                ctrl_gate = 0
                 
-                # print(offset)
-                action_transition.append([action, offset])
-
-                # critic
-                value = self.critic(state.unsqueeze(dim=0).to(self.device))
-
-                done, reward, state = self.env.step(action, offset)
-
-
+                actions = self.model.valid_choice(node_feature.to(self.device),
+                                                  edge_attr.to(self.device),
+                                                  mask)
+                
+                action, q_value = self.select_action(actions, mask, greedy='False')
+                pred_q = q_value
+                
+                # action : node ---> edge
+                node = action
+                action = self.env.convert_to_edge(node)
+                # print(f'src :{self.env.src}\npick edge :{action}\ndst :{self.env.dst}\n----------')
+                if (self.env.src % 2 == 0 and node % 2 != 0) or \
+                    (self.env.src % 2 != 0 and node % 2 == 0):
+                    ctrl_gate = 1
+                # done, reward, state = self.env.step(action)
+                done, reward, state = self.env.step(action)
+                node_feature ,edge_attr = state
+                
                 if done == 0:
-                # critic
-                    next_value = self.critic(state.unsqueeze(dim=0).to(self.device))
-                    target_value = reward.to(self.device) + 0.9 * next_value
+                    # mask = self.env.find_valid_edge()
+                    # actions = \
+                    #     self.model.valid_choice(state.unsqueeze(dim=0).to(self.device), mask)
+                    mask = self.env.find_valid_node()
+                    actions = self.model.valid_choice(node_feature.to(self.device),
+                                                      edge_attr.to(self.device),
+                                                      mask)
+                    next_action, q_value = self.select_action(actions, mask, greedy='True') # True for DQN
+
+                    target_q = reward + 0.9 * q_value
                 else:
-                    target_value = reward.to(self.device)
+                    target_q = reward
 
-                self.actor.optimizer.zero_grad()
-                advantage = target_value - value
-                actor_loss = -log_prob * advantage.detach()
-                actor_loss.backward()
-                self.actor.optimizer.step()
+                # print('{:+.04f}|{:+.04f}'.format(pred_q.item(), target_q.item()))
 
-                self.critic.optimizer.zero_grad()
-                critic_loss = self.loss_function(value, target_value)
-                critic_loss.backward()
-                self.critic.optimizer.step()
+                loss = self.loss_function(pred_q, target_q)
+                loss.backward()
+                self.model.optimizer.step()
 
-                self.record['pi_loss'].append(actor_loss.item())
-                self.record['v_loss'].append(critic_loss.item())
-                loss_record['pi_loss'].append(actor_loss.item())
-                loss_record['v_loss'].append(critic_loss.item())
+                self.train_record['loss'].append(loss.item())
 
-                # action_transition.append(action)
-                             
+                loss_record.append(loss.item())
+
+
+                action_transition.append([node,action])
+
                 if done == 1:
-                    # for action in action_transition:
-                    #     self.env.graph.edges[action].slot_num -= 1
                     for action in action_transition:
-                        self.env.occupy_slot(action)
+                        node,edge = action
+                        self.env.graph.nodes[node].buffer_size -= 1
+
+                        self.env.graph.edges[edge].slot_num -= 1
                     break
                 elif done == -1:
-
                     break
                 elif done == 0:
                     continue
@@ -105,56 +123,75 @@ class Trainer:
             self.env.renew()
 
         reward = self.env.total_reward / len(self.data.flow_info)
-        success_rate = self.env.success_num / len(self.data.flow_info)
-        self.record['reward'].append(reward)
-        self.record['rate'].append(success_rate)
-        mean_pi_loss = sum(loss_record['pi_loss']) / len(loss_record['pi_loss'])
-        mean_v_loss = sum(loss_record['v_loss']) / len(loss_record['v_loss'])
+        success_rate = self.env.success_rate / len(self.data.flow_info)
+        mean_loss = sum(loss_record) / len(loss_record)
+        self.train_record['reward'].append(reward)
+        self.train_record['success_rate'].append(success_rate)
         
-        count_delay = self.env.count_delay / len(self.data.flow_info)
-        count_full = self.env.count_full / len(self.data.flow_info)
-        
-        print(datetime.datetime.now().strftime('\n[%m-%d %H:%M:%S]'),
+        print(datetime.datetime.now().strftime('[%m-%d %H:%M:%S]'),
               'Reward: {:+.02f} |'.format(reward),
-              'Rate: {:.02f}'.format(success_rate))
-        print(datetime.datetime.now().strftime('[%m-%d %H:%M:%S]'),
-              'Pi Loss: {:+.04f} |'.format(mean_pi_loss),
-              'V Loss: {:.04f}'.format(mean_v_loss))
-        print(datetime.datetime.now().strftime('[%m-%d %H:%M:%S]'),
-              'Over delay: {:.02f}% |'.format(count_delay*100),
-              'No space: {:.02f}%'.format(count_full*100))
+              'Rate: {:.02f} |'.format(success_rate),
+              'Loss: {:.04f}'.format(mean_loss))
 
-    @staticmethod
-    def select_action(actions, mask):
-        probs = F.softmax(actions, dim=0)
-        distribution = torch.distributions.Categorical(probs)
-        action = distribution.sample()
-        log_prob = distribution.log_prob(action)
+    def select_action(self, actions, mask, greedy):
+        if greedy == 'False':
+            if random.random() < self.epsilon:
+                action = random.choice(mask)
+                q_value = actions[mask.index(action)]
+            else:
+                action = mask[torch.argmax(actions).item()]
+                q_value = torch.max(actions)
 
-        return mask[action.item()], log_prob
+            return action, q_value
+
+        elif greedy == 'True':
+            action = mask[torch.argmax(actions).item()]
+            q_value = torch.max(actions)
+
+            return action, q_value
+
+    def decrement_epsilon(self):
+        epsilon_decay = 0.9999
+        min_epsilon = 0.01
+        self.epsilon = max(self.epsilon * epsilon_decay, min_epsilon)
+
+    def save_record(self, episode):
+        savfile='train_record_conv'
+        savmdl='model_save_conv'
+        
+        # if episode % 100 == 0:
+        if not os.path.exists(savfile):
+            os.makedirs(savfile)
+        for key in self.train_record.keys():
+            np.save(f'{savfile}/{key}_{episode}.npy', self.train_record[key])
+        if not os.path.exists(savmdl):
+            os.makedirs(savmdl)
+        
+        FILE = f'./{savmdl}/model_{episode}.pt'
+        torch.save(self.model, FILE)
 
     def train(self):
-        for episode in range(3000):
+        episode = 0
+        while True:
             episode += 1
             print(datetime.datetime.now().strftime('[%m-%d %H:%M:%S]'),
                   'Episode: {:04d}'.format(episode))
+            print(datetime.datetime.now().strftime('[%m-%d %H:%M:%S]'),
+                  'Epsilon: {:.06f}'.format(self.epsilon), end='\n\n')
 
             self.train_one_episode()
-
-            self.save_record(episode)
-            print('#' * 60)
-
-    def save_record(self, episode):
-        if episode % 100 == 0:
-            if not os.path.exists('record'):
-                os.makedirs('record')
-            for key in self.record.keys():
-                np.save(f'record/{key}_{episode}.npy', self.record[key])
+            if episode >300:
+                self.decrement_epsilon()
+            if episode %100 ==0:
+                self.save_record(episode)
+            print('#' * 40)
 
 
 def main():
-    if os.path.exists('record'):
-        shutil.rmtree('record')
+    record_path = ['train_record_conv', 'val_record_conv']
+    for path in record_path:
+        if os.path.exists(path):
+            shutil.rmtree(path)
     trainer = Trainer()
     trainer.train()
 

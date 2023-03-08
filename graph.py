@@ -4,80 +4,14 @@ import numpy as np
 class Node:
     def __init__(self, idx):
         self.idx = idx
-        # self.end_node = end_node
         self.buffer_size = 20
-        
+
 class Edge:
     def __init__(self, idx, start_node, end_node):
         self.idx = idx
         self.start_node = start_node
         self.end_node = end_node
-        # self.slot_num = 15
-        self.slot_per_phase = 64
-        self.hyper_period = 1024
-        # self.slot_status = [i for i in range(self.hyper_priod * self.slot_per_phase)]
-        self.slot_status = [1 for _ in range(self.hyper_period * self.slot_per_phase)]
-        
-    def find_slot(self, flow_length, flow_prd):
-        frames = int(self.hyper_period / flow_prd)
-
-        for position in range(self.slot_per_phase - flow_length):
-            offset = []
-            temp = [position + length for length in range(flow_length)]
-            flag = 0
-            for frame in range(frames):
-                if frame > 0:
-                    for idx in range(len(temp)):
-                        temp[idx] += flow_prd * self.slot_per_phase
-                offset.extend(temp)
-
-                for idx in temp:
-                    if self.slot_status[idx] == 1:
-                        flag += 1
-                    else:
-                        break
-
-                if flag == flow_length * (frame + 1):
-                    continue
-                else:
-                    break
-
-            if flag == flow_length * frames:
-                return offset
-
-        return []
-    
-    def occupy_slot(self, offset):
-        for idx in offset:
-            self.slot_status[idx] -= 1
-
-            if self.slot_status[idx] == -1:
-                raise ValueError('Slot status value error!')
-                
-    # def find_slot(self, flow_len, flow_prd):
-    #     for offset in range(self.slot_per_phase - flow_len):
-    #         flag = 0
-    #         frames =int(self.hyper_priod/flow_prd)    
-    #         positions = []
-    #         for i in range(flow_len): 
-    #             if flag:
-    #                 break
-    #             for frame in range(frames):
-    #                 pos = (offset+i)+ frame * self.slot_per_phase
-    #                 if pos in self.slot_status:
-    #                     positions.append(pos)
-    #                 else:
-    #                     flag = 1
-    #                     break
-    #         if flag:
-    #             continue
-    #         else:    
-
-    #             return positions
-    #     return []
-    # def occupy_slot(self,positions):
-    #     for position in positions:
-    #         self.slot_status.remove(position)
+        self.slot_num = 15
 
 
 class Graph:
